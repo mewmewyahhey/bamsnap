@@ -2,6 +2,7 @@ from PIL import ImageFont, Image, ImageDraw
 from .conf import COLOR, GENE_ANNOT_FILE, REFER_SEQ_VERSION
 from .util import getTemplatePath, getDataPath, comma, gzopen, decodeb, convert_int_list, getrgb, get_scale
 import tabix
+import os
 
 LINETYPE = []
 LINETYPE.append('exon')
@@ -30,7 +31,7 @@ class GeneAnnot():
         self.gene_biotype = rec[header.index('gene_biotype')]
         self.transcripts = []
         self.visible_transcripts = []
-        self.load_transcript()
+        # self.load_transcript()
 
     def __str__(self):
         return self.gene_name + "("+ self.gene_id +")"
@@ -76,15 +77,16 @@ class TranscriptAnnot():
 
 
 class GenePlot():
-    def __init__(self, chrom, spos, epos, xscale, w, refversion="hg38", show_transcript = True):
+    def __init__(self, chrom, spos, epos, xscale, w, ref, refversion="hg38", show_transcript = False):
         self.chrom = chrom
         self.nchrom = chrom.replace('chr', '')
         self.spos = spos
         self.epos = epos
         self.g_len = self.epos - self.spos + 1
         self.font = None
-        self.gene_annot_file = getDataPath(GENE_ANNOT_FILE.replace("#REFSEQVERSION#", REFER_SEQ_VERSION[refversion]))
-        self.gene_annot_tb = tabix.open(self.gene_annot_file)
+        self.ref = ref
+        # self.gene_annot_file = getDataPath(GENE_ANNOT_FILE.replace("#REFSEQVERSION#", REFER_SEQ_VERSION[refversion]))
+        # self.gene_annot_tb = tabix.open(self.gene_annot_file)
         self.gene_annot_header = []
         self.gene_annot = []
         self.show_transcript = show_transcript
@@ -98,6 +100,15 @@ class GenePlot():
         self.gene_pos_color = "ffac9c"
         self.gene_neg_color = "A19Cff"
         self.xscale = xscale
+        # self.load_gene_structure()
+        if self.ref:
+            ref_base = os.path.splitext(self.ref)[0]
+            self.gene_annot_file = ref_base + '.bed.gz'
+            if not os.path.exists(self.gene_annot_file):
+                raise FileNotFoundError(f"No annotation file: {self.gene_annot_file}")
+        else:
+            self.gene_annot_file = getDataPath(GENE_ANNOT_FILE.replace("#REFSEQVERSION#", REFER_SEQ_VERSION[refversion]))
+        self.gene_annot_tb = tabix.open(self.gene_annot_file)
         self.load_gene_structure()
 
     def load_gene_structure(self):
@@ -108,16 +119,19 @@ class GenePlot():
                     self.gene_annot_header = line[1:].split('\t')
                     self.gene_annot_header[-1] = self.gene_annot_header[-1].strip()
                     break
-        pos_str = self.nchrom + ':' + str(self.spos) + '-' + str(self.epos)
-
+        if self.spos <= 0:
+            spos_ins = 0
+        else:
+            spos_ins = self.spos
+        pos_str = self.nchrom + ':' + str(spos_ins) + '-' + str(self.epos)
         self.gene_annot = []
         for rec in self.gene_annot_tb.querys(pos_str):
             ga = GeneAnnot(rec, self.gene_annot_header)
-            ga.set_visible_transcript(self.spos, self.epos)
+            if self.show_transcript:
+                ga.set_visible_transcript(self.spos, self.epos)
             self.gene_annot.append(ga)
-            self.noline += len(ga.visible_transcripts)
+            self.noline += len(ga.visible_transcripts) if self.show_transcript else 1
             # self.noline += len(ga.transccripts)
-        
 
     def draw(self, dr):
         y = self.h - 1
@@ -126,6 +140,7 @@ class GenePlot():
 
         yi = 0
         fontsize = self.font.getsize('C')
+        # print(self.gene_annot[0].spos, self.gene_annot[0].epos, self.gene_annot[1].epos, self.gene_annot[1].spos)
         for ga in self.gene_annot:
             # x1 = int((ga.spos - self.spos) * self.scale_x)
             # x2 = int((ga.epos - self.spos) * self.scale_x)
@@ -139,36 +154,26 @@ class GenePlot():
             # dr.text(( x - 50 , yi-15), ga.gene_name, font=self.font, fill=COLOR['COORDINATE'])
 
             # for t1 in ga.transcripts:
-            for t1 in ga.visible_transcripts:
-                # yi += 30
-                # yi += margin + fontsize[1] + lineheight
-                yi += self.margin
+            if len(ga.visible_transcripts) == 0:
+                x = self.xscale.get_x((ga.spos + ga.epos) // 2)['cpos']  # 基因的中心位置
+                # if x < 0 or x >= self.w:  # 确保坐标在图像范围内
+                #     continue
+                txt = ga.gene_name  # 默认标签
+                x1 = max(x - int((len(txt) * fontsize[0]) / 2), 0)
+                dr.text((x1, yi), txt, font=self.font, fill=COLOR['COORDINATE'])
 
-                # x = int((min(ga.epos, self.epos) - max(ga.spos, self.spos)) / 2) * self.xscale.scale_x
-                x = self.xscale.get_x( (min(t1.epos, self.epos) + max(t1.spos, self.spos))/2 )['cpos']
-                
-                txt = ga.gene_name + " ("  + t1.transcript_id + ")"
-                x1 = min(max (x - int((len(txt) * fontsize[0])/2) , 0), self.w-len(txt) * fontsize[0])
-                dr.text( (x1, yi), txt, font=self.font, fill=COLOR['COORDINATE'])
+                # 绘制基因的边界线
+                x1 = self.xscale.get_x(ga.spos)['spos']
+                x2 = self.xscale.get_x(ga.epos)['epos']
 
-                yi += fontsize[1] + int(self.lineheight/2)
+                yi += fontsize[1] + int(self.lineheight / 2)
+
                 col1 = getrgb(self.gene_neg_color, whitening=50) if ga.is_negative else getrgb(self.gene_pos_color, whitening=50)
-                for i, s1 in enumerate(t1.subregion['exon_spos']):
-                    x1 = max(self.xscale.get_x(t1.subregion['exon_spos'][i])['spos'], 0)
-                    x2 = max(min(self.xscale.get_x(t1.subregion['exon_epos'][i])['epos'], self.w), 0)
-                    if x1 > 0 or x2 > 0:
-                        dr.line([(x1, yi), (x2, yi)], fill=col1, width=self.lineheight)
-
-                x1 = self.xscale.get_x(t1.spos)['spos']
-                x2 = self.xscale.get_x(t1.epos)['epos']
-                if x1 < 0:
-                    x1 = 0
-                if x2 > self.w:
-                    x2 = self.w
+                dr.line([(x1, yi), (x2, yi)], fill=col1, width=self.lineheight)
 
                 col1 = getrgb(self.gene_neg_color) if ga.is_negative else getrgb(self.gene_pos_color)
                 dr.line([(x1, yi), (x2, yi)], fill=col1, width=2)
-                
+
                 xi = 10
                 d = 3
                 for i in range(100):
@@ -180,8 +185,51 @@ class GenePlot():
                             dr.polygon([(xi, yi), (xi + d, yi + d), (xi + d, yi - d)], fill=col1)
                         else:
                             dr.polygon([(xi, yi), (xi - d, yi + d), (xi - d, yi - d)], fill=col1)
-                        
-                yi += int(self.lineheight/2)
+
+            # for t1 in ga.visible_transcripts:
+            #     # yi += 30
+            #     # yi += margin + fontsize[1] + lineheight
+            #     yi += self.margin
+            #
+            #     # x = int((min(ga.epos, self.epos) - max(ga.spos, self.spos)) / 2) * self.xscale.scale_x
+            #     x = self.xscale.get_x( (min(t1.epos, self.epos) + max(t1.spos, self.spos))/2 )['cpos']
+            #
+            #     txt = ga.gene_name + " ("  + t1.transcript_id + ")"
+            #     x1 = min(max (x - int((len(txt) * fontsize[0])/2) , 0), self.w-len(txt) * fontsize[0])
+            #     dr.text( (x1, yi), txt, font=self.font, fill=COLOR['COORDINATE'])
+            #
+            #     yi += fontsize[1] + int(self.lineheight/2)
+            #     col1 = getrgb(self.gene_neg_color, whitening=50) if ga.is_negative else getrgb(self.gene_pos_color, whitening=50)
+            #     for i, s1 in enumerate(t1.subregion['exon_spos']):
+            #         x1 = max(self.xscale.get_x(t1.subregion['exon_spos'][i])['spos'], 0)
+            #         x2 = max(min(self.xscale.get_x(t1.subregion['exon_epos'][i])['epos'], self.w), 0)
+            #         if x1 > 0 or x2 > 0:
+            #             dr.line([(x1, yi), (x2, yi)], fill=col1, width=self.lineheight)
+            #
+            #     x1 = self.xscale.get_x(t1.spos)['spos']
+            #     x2 = self.xscale.get_x(t1.epos)['epos']
+            #     if x1 < 0:
+            #         x1 = 0
+            #     if x2 > self.w:
+            #         x2 = self.w
+            #
+            #     col1 = getrgb(self.gene_neg_color) if ga.is_negative else getrgb(self.gene_pos_color)
+            #     dr.line([(x1, yi), (x2, yi)], fill=col1, width=2)
+            #
+            #     xi = 10
+            #     d = 3
+            #     for i in range(100):
+            #         xi = i * 60 + 20
+            #         if xi > x2:
+            #             break
+            #         if xi >= x1:
+            #             if ga.is_negative:
+            #                 dr.polygon([(xi, yi), (xi + d, yi + d), (xi + d, yi - d)], fill=col1)
+            #             else:
+            #                 dr.polygon([(xi, yi), (xi - d, yi + d), (xi - d, yi - d)], fill=col1)
+            #     yi += int(self.lineheight/2)
+        output_image_path = "/dssg/home/acct-clsylt/clsylt-lst/miniconda3/envs/testbamsnap/lib/python3.12/site-packages/bamsnap/test.png"
+        self.im.save(output_image_path)
     
     def get_image(self):
         if self.im is None:
