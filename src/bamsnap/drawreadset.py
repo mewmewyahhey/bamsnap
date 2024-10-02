@@ -76,9 +76,10 @@ class CoveragePlot():
             vaf = self.get_vaf(base_composition, cov, posi, refseq)
             if vaf >= self.coverage_vaf_threshold:
                 for base in base_composition.keys():
+                    base1 = base.upper()
                     h2 = base_composition[base] / max_cov * h
                     y21 = y11-h2
-                    dr.line([(x, y11), (x, y21)], fill=COLOR[base], width=self.xscale.base_width)
+                    dr.line([(x, y11), (x, y21)], fill=COLOR[base1], width=self.xscale.base_width)
                     y11 = y21
 
         x1 = 0
@@ -297,7 +298,12 @@ class DrawReadSet():
         for group in group_list:
             self.max_cov[group] = 0
 
-        for a in self.samAlign.fetch(self.chrom, self.g_spos-self.read_gap_w-500, self.g_epos+500):
+        # 确保 g_spos 的值在合理范围内
+        start_pos = max(0, self.g_spos - self.read_gap_w - 500)  # 设置最小为 0
+        end_pos = self.g_epos + 500  # 结束位置可以根据需求设置
+
+        # 调用 fetch() 方法
+        for a in self.samAlign.fetch(self.chrom, start_pos, end_pos):
             if len(a.positions) > 0:
                 rid = self.get_rid(a)
                 self.update_ref_seq_with_read(a)
@@ -342,6 +348,8 @@ class DrawReadSet():
 
     def get_estimated_height(self, group='all'):
         h = self.max_cov[group] * (self.read_thickness + self.read_gap_h) + self.read_thickness
+        if h > 500:
+            h = 500
         return h
 
     def get_image(self, w, h, group, readcolor="C8C8C8", bgcolor="FFFFFF", readcolorby=""):
@@ -355,6 +363,8 @@ class DrawReadSet():
             for rid in self.readlist[group]:
                 r = self.readset[rid]
                 r.yidx = self.get_yidx(r, group)
+                if r.yidx > 80:
+                    continue
                 r.xscale = self.xscale
                 r.read_thickness = self.read_thickness
                 r.draw(dr, col1, readcolorby)
