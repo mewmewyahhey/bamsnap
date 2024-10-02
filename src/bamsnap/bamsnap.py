@@ -230,9 +230,9 @@ def run_process_drawplot_bamlist(image_w, bamlist, poslist, opt, is_single_image
     bsplot.set_is_single_image_out(is_single_image_out)
     for pos1 in poslist:
         t11 = time.time()
-        refseq = rseq.get_refseq(pos1)
+        refseq, chrom_len = rseq.get_refseq(pos1)
         xscale = Xscale(pos1['g_spos'], pos1['g_epos'], image_w)
-        imagefname = bsplot.drawplot_bamlist(pos1, image_w, bamlist, xscale, refseq)
+        imagefname = bsplot.drawplot_bamlist(pos1, image_w, bamlist, xscale, refseq, chrom_len)
         t12 = time.time()
         opt['log'].info("(" + mp.current_process().name + ") Saved " +
                         imagefname + " : " + str(round(t12-t11, 5)) + " sec")
@@ -346,7 +346,7 @@ class BamSnapPlot():
         dr.line([(0, h1), (w, h1)], fill=getrgb('000000'), width=1)
         return im
 
-    def get_bamplot_image(self, bam, pos1, image_w, xscale, refseq):
+    def get_bamplot_image(self, bam, pos1, image_w, xscale, refseq, chrom_len):
         rset = DrawReadSet(bam, pos1['chrom'], pos1['g_spos'], pos1['g_epos'], xscale, refseq)
         rset.read_gap_w = self.opt['read_gap_width']
         rset.read_gap_h = self.opt['read_gap_height']
@@ -404,7 +404,7 @@ class BamSnapPlot():
                 im = self.append_geneplot_image(im, pos1, image_w, xscale)
 
             if plot1 == "base":
-                im = self.append_baseplot_image(im, pos1, image_w, xscale, refseq)
+                im = self.append_baseplot_image(im, pos1, image_w, xscale, refseq, chrom_len)
 
         if self.opt['border']:
             padding_bottom = 15
@@ -433,7 +433,7 @@ class BamSnapPlot():
 
     def append_geneplot_image(self, ia, pos1, image_w, xscale):
         geneplot = GenePlot(pos1['chrom'], pos1['g_spos'], pos1['g_epos'], xscale,
-                            image_w, self.opt['refversion'], show_transcript=True)
+                            image_w, self.opt['ref'], self.opt['refversion'], show_transcript=False)
         geneplot.font = self.get_font(self.opt['gene_fontsize'])
         geneplot.gene_pos_color = self.opt['gene_pos_color']
         geneplot.gene_neg_color = self.opt['gene_neg_color']
@@ -441,8 +441,8 @@ class BamSnapPlot():
         ia = self.append_image(ia, ia_sub)
         return ia
 
-    def append_baseplot_image(self, ia, pos1, image_w, xscale, refseq):
-        baseplot = BaseTrack(pos1['chrom'], pos1['g_spos'], pos1['g_epos'], refseq, xscale, image_w)
+    def append_baseplot_image(self, ia, pos1, image_w, xscale, refseq, chrom_len):
+        baseplot = BaseTrack(pos1['chrom'], pos1['g_spos'], pos1['g_epos'], refseq, chrom_len, xscale, image_w)
         baseplot.font = self.get_font(self.opt['base_fontsize'])
         ia_sub = baseplot.get_image(self.opt['base_margin_top'], self.opt['base_margin_bottom'])
         ia = self.append_image(ia, ia_sub)
@@ -458,7 +458,7 @@ class BamSnapPlot():
     #     zo.close()
     #     self.opt['log'].info("(" + mp.current_process().name + ") Saved " + outzip)
 
-    def drawplot_bamlist(self, pos1, image_w, bamlist, xscale, refseq):
+    def drawplot_bamlist(self, pos1, image_w, bamlist, xscale, refseq, chrom_len):
         ia = self.init_image(image_w, self.opt['bgcolor'])
         drawA = None
 
@@ -470,7 +470,7 @@ class BamSnapPlot():
                 for bidx, bam in enumerate(bamlist):
                     if (bidx + 1) % 10 == 0:
                         self.opt['log'].info("..processing " + bam.filename + " (" + str(bidx + 1) + ")")
-                    ia_sub = self.get_bamplot_image(bam, pos1, image_w, xscale, refseq)
+                    ia_sub = self.get_bamplot_image(bam, pos1, image_w, xscale, refseq, chrom_len)
                     ia = self.append_image(ia, ia_sub)
 
                     if not self.opt['border'] and self.opt['separator_height'] > 0:
@@ -481,7 +481,7 @@ class BamSnapPlot():
                 ia = self.append_geneplot_image(ia, pos1, image_w, xscale)
 
             if plot1 == "base":
-                ia = self.append_baseplot_image(ia, pos1, image_w, xscale, refseq)
+                ia = self.append_baseplot_image(ia, pos1, image_w, xscale, refseq, chrom_len)
 
         if self.opt['grid'] > 0:
             drawA = ImageDraw.Draw(ia)
@@ -538,10 +538,10 @@ class ReferenceSequence():
     def get_refseq(self, pos1):
         refseq = {}
         if self.opt['ref'] == "":
-            refseq = self.get_refseq_from_ucsc(pos1)
+            refseq, chrom_len = self.get_refseq_from_ucsc(pos1)
         else:
-            refseq = self.get_refseq_from_localfasta(pos1)
-        return refseq
+            refseq, chrom_len = self.get_refseq_from_localfasta(pos1)
+        return refseq, chrom_len
 
     # def set_refseq_from_ncbiapi(self):
     #     url = "http://www.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nucleotide"
@@ -572,26 +572,32 @@ class ReferenceSequence():
         #     "/dna?segment=chr"+pos1['chrom']+":"+str(spos+1)+","+str(epos+1)
         cont = get_url(url)
         seq = ""
+        chrom_len = 0
         for line in cont.strip().split('\n'):
             if line[0] != '<':
                 seq += line.strip().upper()
+                chrom_len += 1
         i = 0
         refseq = {}
         for gpos in range(spos, epos):
             refseq[gpos] = seq[i]
             i += 1
-        return refseq
+        return refseq, chrom_len
 
     def get_refseq_from_localfasta(self, pos1):
-        spos = pos1['g_spos']-self.opt['margin'] - 500
-        epos = pos1['g_epos']+self.opt['margin'] + 1 + 500
-        seq = self.get_refseq_from_fasta(pos1['chrom'], spos, epos, self.opt['ref_index_rebuild'])
+
+        spos = max(0, pos1['g_spos'] - 500)
+        epos = pos1['g_epos'] + 501
+        seq, chrom_len = (self.get_refseq_from_fasta(pos1['chrom'], spos, epos, self.opt['ref_index_rebuild']))
+        epos = min(chrom_len, epos)
         i = 0
         refseq = {}
         for gpos in range(spos, epos):
+            if i >= len(seq):
+                break
             refseq[gpos+1] = seq[i]
             i += 1
-        return refseq
+        return refseq, chrom_len
 
     def get_refseq_from_fasta(self, chrom, spos, epos, rebuild_index=False):
         f = self.fasta
@@ -600,5 +606,13 @@ class ReferenceSequence():
             arr = c1.split(' ')
             tchrom = arr[0]
             fastachrommap[tchrom] = c1
-        refseq = f[fastachrommap[chrom]][spos:epos+1]
-        return str(refseq)
+        chrom_seq = f[fastachrommap[chrom]]
+        chrom_len = len(chrom_seq)
+
+        if spos < 0:
+            spos = 0
+        if epos >= chrom_len:
+            epos = chrom_len - 1
+        ref_seq = chrom_seq[spos:epos + 1]
+
+        return str(ref_seq), chrom_len
