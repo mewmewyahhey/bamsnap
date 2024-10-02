@@ -72,7 +72,7 @@ def set_pos_list(opt):
                     arr2 = arr[1].split('-')
                     p1['t_spos'] = int(arr2[0])
                     p1['t_epos'] = int(arr2[1]) + 1
-                    if int(opt['margin']) > 0:
+                    if int(opt['margin']) >= 0:
                         p1['g_spos'] = p1['t_spos'] - int(opt['margin'])
                         p1['g_epos'] = p1['t_epos'] + int(opt['margin'])
                 else:  # SNV
@@ -82,6 +82,7 @@ def set_pos_list(opt):
                     p1['g_spos'] = p1['t_spos'] - int(opt['margin'])
                     p1['g_epos'] = p1['t_epos'] + int(opt['margin'])
                 poslist.append(p1)
+                print(p1)
 
     if ('vcf' in ks and opt['vcf'] is not None):
         for line in util.gzopen(opt['vcf']):
